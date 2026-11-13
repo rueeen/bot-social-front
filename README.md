@@ -24,22 +24,22 @@ La arquitectura es plana: las páginas llaman directamente a la API; `src/api.js
 
 ## Contrato esperado del backend
 
-El repositorio original estaba vacío y no incluye backend ni esquema OpenAPI. Estos son los contratos adoptados; confirmar con `ecoforo-back` antes del uso en clase. Los nombres se usan directamente en las páginas, sin una capa de datos adicional.
+Contrato verificado de `bot-social-back`, fuente de verdad de la API. Los nombres se usan directamente en las páginas, sin una capa de datos adicional.
 
 | Método y ruta | Entrada / respuesta |
 | --- | --- |
 | GET `/hilos/` | Lista de hilos |
 | GET `/hilos/:id/` | Hilo |
-| GET `/comentarios/?hilo=:id&desde_id=N&corrida=:id` | Comentarios posteriores al ID; `corrida` opcional |
-| POST `/comentarios/` | `{hilo, autor_nombre, texto}` → comentario creado |
+| GET `/hilos/:id/comentarios/?desde_id=N&corrida=:id` | `{comentarios: [...], ultimo_id: N}`; `corrida` opcional |
+| POST `/hilos/:id/comentarios/` | `{autor_nombre, texto}` (humano), más `{es_bot:true, postura_bot, corrida}` (bot autorizado) → comentario creado |
 | GET `/hilos/:id/corridas/` | Lista de `{id, etiqueta}` |
 | GET `/hilos/:id/snapshots/` | Lista de snapshots de todas las corridas, incluida ronda 0 |
 | POST `/token/` | `{username,password}` → `{access,refresh}` |
 | POST `/token/refresh/` | `{refresh}` → `{access,refresh?}` |
 | GET / POST `/panel/hilos/` | Listar / crear hilo |
-| PATCH `/panel/hilos/:id/` | `{abierto:boolean}` → hilo actualizado |
+| PATCH `/panel/hilos/:id/` | `{estado: "abierto" o "cerrado"}` → hilo actualizado |
 
-Hilo: `{id,titulo,tema,pregunta_postura,abierto}`. Comentario: `{id,hilo,autor_nombre,texto,fecha,es_bot,postura,corrida}`; `fecha` ISO 8601, `postura` `favor`, `contra`, `neutral` (también acepta `a_favor`, `en_contra` o un número firmado). Los IDs de comentario son numéricos y crecientes. El servidor debe ordenarlos por ID ascendente para mantener la conversación estable.
+Hilo: `{id,titulo,tema,pregunta_postura,estado}`. Comentario: `{id,hilo,autor_nombre,texto,fecha,es_bot,postura_bot,corrida}`; `fecha` ISO 8601, `postura_bot` `favor`, `contra`, `neutral` (también acepta `a_favor`, `en_contra` o un número firmado). Los IDs de comentario son numéricos y crecientes. El servidor debe ordenarlos por ID ascendente para mantener la conversación estable.
 
 Snapshot de ejemplo:
 
@@ -48,29 +48,21 @@ Snapshot de ejemplo:
   "corrida": 1,
   "ronda": 0,
   "promedio": 12.5,
-  "comentarios_bot": {"favor": 4, "contra": 2, "neutral": 1},
-  "histograma": [
-    {"tramo": "-100 a -80", "cantidad": 0},
-    {"tramo": "-80 a -60", "cantidad": 1},
-    {"tramo": "-60 a -40", "cantidad": 2},
-    {"tramo": "-40 a -20", "cantidad": 3},
-    {"tramo": "-20 a 0", "cantidad": 8},
-    {"tramo": "0 a 20", "cantidad": 12},
-    {"tramo": "20 a 40", "cantidad": 7},
-    {"tramo": "40 a 60", "cantidad": 4},
-    {"tramo": "60 a 80", "cantidad": 2},
-    {"tramo": "80 a 100", "cantidad": 1}
-  ]
+  "n_comentarios_bot": 7,
+  "n_favor": 4,
+  "n_contra": 2,
+  "n_neutral": 1,
+  "histograma": {"-100": 0, "-80": 1, "-60": 2, "-40": 3, "-20": 8, "0": 12, "20": 7, "40": 4, "60": 2, "80": 1}
 }
 ```
 
-`comentarios_bot` contiene totales acumulados hasta esa ronda. El cambio de postura se calcula frente a ronda 0, nunca frente al primer dato disponible si falta esa ronda. La banda de dispersión y el reinicio de simulación son opcionales y no están incluidos.
+`n_comentarios_bot`, `n_favor`, `n_contra` y `n_neutral` contienen los conteos del snapshot. El cambio de postura se calcula frente a ronda 0, nunca frente al primer dato disponible si falta esa ronda. La banda de dispersión y el reinicio de simulación son opcionales y no están incluidos.
 
 ## Autenticación e integridad
 
 El login guarda JWT en `localStorage.access_token` y `refresh_token`. Solo `/panel/` recibe `Authorization: Bearer`; un 401 renueva una vez y las solicitudes concurrentes comparten la renovación. Si falla, se cierra la sesión. El backend devuelve errores `{"error":"mensaje"}` para mostrarlos en un aviso.
 
-Axios agrega `X-Bot-Token` si existe `localStorage.bot_token`, excepto en solicitudes explícitamente humanas (incluido el formulario de comentario). Los bots Playwright pueden inyectarlo y usar la API desde el navegador; el formulario visible sigue siendo humano. No hay controles para declarar `es_bot` ni `postura` al publicar como humano.
+Axios agrega `X-Bot-Token` si existe `localStorage.bot_token`, excepto en solicitudes explícitamente humanas. Sin token, el formulario envía solo nombre (hasta 30 caracteres) y texto (hasta 400). Con token, el mismo formulario permite publicar al bot Playwright e incluye `es_bot: true`, `postura_bot` y `corrida` desde localStorage. El token autoriza y el cuerpo identifica el comentario como bot.
 
 **El backend debe imponer esta separación**: ignorar/rechazar `es_bot` y postura proporcionados por un humano, validar el token de bot, impedir publicaciones en hilos cerrados y exigir JWT en operaciones de presentador. El navegador no puede garantizar permisos del servidor. El backend debe configurar CORS para el origen de Netlify y permitir `Authorization`, `Content-Type` y `X-Bot-Token`. Usar HTTPS y no registrar tokens. La aplicación no pide tokens en su UI.
 
